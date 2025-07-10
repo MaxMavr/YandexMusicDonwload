@@ -23,3 +23,6 @@ YANDEX_ARTIST_ID_PATTERN = r'https://music\.yandex\.ru/artist/(\d+)'
 __MAIN_DIR = f'{os.path.dirname(__file__)}'
 DOWNLOAD_PATH = f'L:/video photo music/music/Скаченое'
 TEMP_PATH = f'{DOWNLOAD_PATH}/temp'
+
+
+NUMBER_DOWNLOAD_TRYING = 10

@@ -1,41 +1,29 @@
 from config import *
 
 
-__client = ClientAsync(YANDEX_TOKEN)
+yandex_client = ClientAsync(YANDEX_TOKEN)
 
 
-print("\n\n\n\tЯндекс Скачиватель 0.0.4\n\n")
+print("\n\n\n\tЯндекс Скачиватель 1.0.0\n\n")
 
 
 def make_song_link(song_id: str, album_id: str) -> str:
     return f'https://music.yandex.ru/album/{album_id}/track/{song_id}'
 
 
-def make_dir(dir_path):
+def make_dir(dir_path) -> bool:
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
         return True
     return False
 
 
-def format_date(date_str: str):
-    if not date_str:
-        return ''
-    date = datetime.fromisoformat(date_str)
-    return date
-
-
 def clear_special_char(string: str) -> str:
-    string = string.replace('\\', '')
-    string = string.replace('/', '')
-    string = string.replace(':', '')
-    string = string.replace('*', '')
-    string = string.replace('?', '')
-    string = string.replace('"', '')
-    string = string.replace('<', '')
-    string = string.replace('>', '')
-    string = string.replace('|', '')
-    string = string.replace('.', '')
+    special_chars = '\\/:*?"<>|.'
+
+    for ch in special_chars:
+        string = string.replace(ch, '')
+
     return string
 
 
@@ -47,7 +35,7 @@ def make_feats_artists_title(artists: List[Artist]):
     return 'feat. ' + ', '.join([art.name for art in artists[1:]])
 
 
-async def download_img(img_link: str):
+async def download_img(img_link: str) -> str:
     save_path = f'{TEMP_PATH}/{clear_special_char(img_link)}.png'
     url = 'https://' + img_link.replace('%%', '1000x1000')
 
@@ -60,8 +48,8 @@ async def download_img(img_link: str):
                         await img.write(content)
                     return save_path
     except Exception as e:
-        print(f"Ошибка при загрузке {url}: {e}")
-    return None
+        print(f"Ошибка при загрузке обложки: {e}")
+    return ''
 
 
 async def decoration_song(album: Album, song: Track, song_path: str):
@@ -71,8 +59,8 @@ async def decoration_song(album: Album, song: Track, song_path: str):
         audio.add_tags()
 
     feats = make_feats_artists_title(song.artists)
-    date = format_date(album.release_date)
-    img = download_img(album.cover_uri)
+    release_date = album.release_date
+    img = await download_img(album.cover_uri)
 
     # - TIT2 - Название трека (Title)
     # - TPE1 - Исполнитель (Artist)
@@ -105,10 +93,11 @@ async def decoration_song(album: Album, song: Track, song_path: str):
 
     audio.tags.add(WXXX(encoding=3, text=make_song_link(song.id, str(album.id))))
 
-    if feats != 'feat.':
+    if feats != 'feat. ':
         audio.tags.add(TPE2(encoding=3, text=feats))
 
-    if date != '':
+    if release_date:
+        date = datetime.fromisoformat(release_date)
         audio.tags.add(TYER(encoding=3, text=str(date.year)))
         audio.tags.add(TDRL(encoding=3, text=date.strftime("%Y-%m-%d")))
 
@@ -123,9 +112,9 @@ async def decoration_song(album: Album, song: Track, song_path: str):
 
 async def download_song(album: Union[Album, str], song: Union[Track, str]):
     if isinstance(album, str):
-        album = (await __client.albums(album))[0]
+        album = (await yandex_client.albums(album))[0]
     if isinstance(song, str):
-        song = (await __client.tracks(song))[0]
+        song = (await yandex_client.tracks(song))[0]
 
     album: Album = album
     song: Track = song
@@ -148,16 +137,25 @@ async def download_song(album: Union[Album, str], song: Union[Track, str]):
     save_path = f'{DOWNLOAD_PATH}/{album_artists_dir_title}/{album_dir_title}/{song_file_title}.mp3'
     if os.path.exists(save_path):
         print(f'\t         Нашёл песню {song_file_title}')
-
     else:
-        await song.download_async(save_path)
-        print(f'\t         Скачал песню {song_file_title}')
+        delay = 1
+        for i in range(NUMBER_DOWNLOAD_TRYING):
+            try:
+                await song.download_async(save_path)
+                print(f'\t         Скачал песню {song_file_title}')
 
-        await decoration_song(album, song, save_path)
+                await decoration_song(album, song, save_path)
+
+                break
+            except Exception as e:
+                print(f"\t         Не удалось скачать.\n\t         Попытка: {i + 1}\n\t         Ошибка: {e}")
+
+                await asyncio.sleep(delay)
+                delay *= 2
 
 
-async def download_album(album_id: str):
-    album = await __client.albums_with_tracks(album_id)
+async def download_album(album: str):
+    album = await yandex_client.albums_with_tracks(album)
 
     for volume in album.volumes:
         for song in volume:
@@ -165,14 +163,14 @@ async def download_album(album_id: str):
 
 
 async def download_artist(artist_id: str):
-    artist = (await __client.artists(artist_id))[0]
+    artist = (await yandex_client.artists(artist_id))[0]
 
     for album in await artist.get_albums():
         await download_album(album.id)
 
 
 async def main():
-    print('\tСохраняет в стандартную папку загрузок\n\t\t{DOWNLOAD_PATH}\n\tДля выхода просто введи «!»')
+    print(f'\tСохраняет в стандартную папку загрузок\n\t\t{DOWNLOAD_PATH}\n\tДля выхода просто введи «!»')
 
     while True:
         link = input("\n\tВведи ссылку на трек или на альбом:\n\t")
@@ -182,17 +180,13 @@ async def main():
         artist = re_search(YANDEX_ARTIST_ID_PATTERN, link)
 
         if song:
-            song_id = song.group(2)
-            album_id = song.group(1)
-            await download_song(album=album_id, song=song_id)
+            await download_song(album=song.group(1), song=song.group(2))
 
         elif album:
-            album_id = album.group(1)
-            await download_album(album_id)
+            await download_album(album=album.group(1))
 
         elif artist:
-            artist_id = artist.group(1)
-            await download_artist(artist_id)
+            await download_artist(artist_id=artist.group(1))
 
         elif link == '!':
             break
